@@ -1,14 +1,19 @@
-if (OSM.PIWIK_LOCATION && OSM.PIWIK_SITE) {
+if (OSM.PIWIK) {
   $(document).ready(function () {
-    var base = document.location.protocol + "//" + OSM.PIWIK_LOCATION + "/";
+    var base = document.location.protocol + "//" + OSM.PIWIK.location + "/";
+    var piwikTracker;
 
-    $.ajax({
+    var piwikLoader = $.ajax({
       url: base + "piwik.js",
       dataType: "script",
       cache: true,
       success: function () {
-        var piwikTracker = Piwik.getTracker(base + "piwik.php", OSM.PIWIK_SITE);
+        piwikTracker = Piwik.getTracker(base + "piwik.php", OSM.PIWIK.site);
       
+        if (OSM.user) {
+          piwikTracker.setUserId(OSM.user.toString());
+        }
+
         piwikTracker.trackPageView();
         piwikTracker.enableLinkTracking();
       
@@ -16,6 +21,12 @@ if (OSM.PIWIK_LOCATION && OSM.PIWIK_SITE) {
           piwikTracker.trackGoal($(this).attr("content"));
         });
       }
+    });
+
+    $("body").on("piwikgoal", function (e, goal) {
+      piwikLoader.done(function () {
+        piwikTracker.trackGoal(goal);
+      });
     });
   });
 }

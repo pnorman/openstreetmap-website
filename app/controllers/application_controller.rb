@@ -9,11 +9,7 @@ class ApplicationController < ActionController::Base
     if session[:user]
       @user = User.where(:id => session[:user]).where("status IN ('active', 'confirmed', 'suspended')").first
 
-      if @user.display_name != cookies["_osm_username"]
-        logger.info "Session user '#{@user.display_name}' does not match cookie user '#{cookies['_osm_username']}'"
-        reset_session
-        @user = nil
-      elsif @user.status == "suspended"
+    if @user.status == "suspended"
         session.delete(:user)
         session_expires_automatically
 
@@ -77,7 +73,7 @@ class ApplicationController < ActionController::Base
     if request.cookies["_osm_session"].to_s == ""
       if params[:cookie_test].nil?
         session[:cookie_test] = true
-        redirect_to params.merge(:cookie_test => "true")
+        redirect_to Hash[params].merge(:cookie_test => "true")
         return false
       else
         flash.now[:warning] = t 'application.require_cookies.cookies_needed'
@@ -196,14 +192,22 @@ class ApplicationController < ActionController::Base
 
   def check_database_readable(need_api = false)
     if STATUS == :database_offline or (need_api and STATUS == :api_offline)
-      redirect_to :controller => 'site', :action => 'offline'
+      if request.xhr?
+        report_error "Database offline for maintenance", :service_unavailable
+      else
+        redirect_to :controller => 'site', :action => 'offline'
+      end
     end
   end
 
   def check_database_writable(need_api = false)
     if STATUS == :database_offline or STATUS == :database_readonly or
        (need_api and (STATUS == :api_offline or STATUS == :api_readonly))
-      redirect_to :controller => 'site', :action => 'offline'
+      if request.xhr?
+        report_error "Database offline for maintenance", :service_unavailable
+      else
+        redirect_to :controller => 'site', :action => 'offline'
+      end
     end
   end
 
@@ -284,14 +288,14 @@ class ApplicationController < ActionController::Base
     response.header['Vary'] = 'Accept-Language'
 
     if @user && !@user.languages.empty?
-      request.user_preferred_languages = @user.languages
+      http_accept_language.user_preferred_languages = @user.languages
       response.header['Vary'] = '*'
     end
 
     I18n.locale = select_locale
 
-    if @user && @user.languages.empty? && !request.user_preferred_languages.empty?
-      @user.languages = request.user_preferred_languages
+    if @user && @user.languages.empty? && !http_accept_language.user_preferred_languages.empty?
+      @user.languages = http_accept_language.user_preferred_languages
       @user.save
     end
 
@@ -300,11 +304,11 @@ class ApplicationController < ActionController::Base
 
   def select_locale(locales = I18n.available_locales)
     if params[:locale]
-      request.user_preferred_languages = [ params[:locale] ]
+      http_accept_language.user_preferred_languages = [ params[:locale] ]
     end
 
-    if request.compatible_language_from(locales).nil?
-      request.user_preferred_languages = request.user_preferred_languages.collect do |pl|
+    if http_accept_language.compatible_language_from(locales).nil?
+      http_accept_language.user_preferred_languages = http_accept_language.user_preferred_languages.collect do |pl|
         pls = [ pl ]
 
         while pl.match(/^(.*)-[^-]+$/)
@@ -316,7 +320,7 @@ class ApplicationController < ActionController::Base
       end.flatten
     end
 
-    request.compatible_language_from(locales) || I18n.default_locale
+    http_accept_language.compatible_language_from(locales) || I18n.default_locale
   end
 
   helper_method :select_locale
@@ -370,7 +374,7 @@ class ApplicationController < ActionController::Base
   rescue ActionView::Template::Error => ex
     ex = ex.original_exception
 
-    if ex.is_a?(ActiveRecord::StatementInvalid) and ex.message =~ /^Timeout::Error/
+    if ex.is_a?(ActiveRecord::StatementInvalid) and ex.message =~ /execution expired/
       ex = Timeout::Error.new
     end
 
@@ -421,6 +425,28 @@ class ApplicationController < ActionController::Base
   def fetch_body
     request.body.rewind
   end
+
+  def map_layout
+    request.xhr? ? 'xhr' : 'map'
+  end
+
+  def preferred_editor
+    editor = if params[:editor]
+      params[:editor]
+    elsif @user and @user.preferred_editor
+      @user.preferred_editor
+    else
+      DEFAULT_EDITOR
+    end
+
+    if request.env['HTTP_USER_AGENT'] =~ /MSIE|Trident/ and editor == 'id'
+      editor = 'potlatch2'
+    end
+
+    editor
+  end
+
+  helper_method :preferred_editor
 
 private 
 

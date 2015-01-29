@@ -1,4 +1,3 @@
-
 <div id="login_login">
 <% content_for :heading do %>
   <h1><%= t 'user.login.heading' %></h1>
@@ -45,7 +44,6 @@
           <li><%= link_to image_tag("openid.png", :alt => t("user.login.openid_providers.openid.title")), "#", :id => "openid_open_url", :title => t("user.login.openid_providers.openid.title") %></li>
           <li><%= openid_button "google", "gmail.com" %></li>
           <li><%= openid_button "yahoo", "me.yahoo.com" %></li>
-          <li><%= openid_button "myopenid", "myopenid.com" %></li>
           <li><%= openid_button "wordpress", "wordpress.com" %></li>
           <li><%= openid_button "aol", "aol.com" %></li>
         </ul>
@@ -58,7 +56,7 @@
 
           <div id="remember_me_openid" class='form-row'>
             <%= check_box_tag "remember_me_openid", "yes", false, :tabindex => 5 %>
-            <label class="standard-label" for="remember_me"><%= t 'user.login.remember' %></label>
+            <label class="standard-label" for="remember_me_openid"><%= t 'user.login.remember' %></label>
           </div>
 
         <%= submit_tag t('user.login.login_button'), :tabindex => 6, :id => "login_openid_submit" %>
@@ -73,6 +71,11 @@
 
 <script type="text/javascript">
 $(document).ready(function() {
+  // Preserve location hash in referer
+  if (window.location.hash) {
+    $('#referer').val($('#referer').val() + window.location.hash);
+  }
+
   $("#openid_open_url").click(function() {
     $("#openid_url").val("http://");
     $("#login_openid_buttons").hide();

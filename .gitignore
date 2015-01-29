@@ -1,6 +1,13 @@
 log
+config/piwik.yml
 public/assets
 public/attachments
+public/export
 tmp
 .DS_Store
 *~
+doc
+.vagrant
+.ruby-gemset
+.ruby-version
+.idea

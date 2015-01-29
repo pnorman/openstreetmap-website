@@ -1,6 +1,6 @@
-require File.dirname(__FILE__) + '/../test_helper'
+require 'test_helper'
 
-class UserLoginTest < ActionController::IntegrationTest
+class UserLoginTest < ActionDispatch::IntegrationTest
   fixtures :users
 
   def setup
@@ -16,17 +16,18 @@ class UserLoginTest < ActionController::IntegrationTest
     follow_redirect!
     assert_response :success
 
-    post '/login', {'username' => user.email, 'password' => "wrong", :referer => "/browse"}
+    post '/login', {'username' => user.email, 'password' => "wrong", :referer => "/history"}
     assert_response :redirect
     follow_redirect!
     assert_response :success
     assert_template 'login'
 
-    post '/login', {'username' => user.email, 'password' => "test", :referer => "/browse"}
+    post '/login', {'username' => user.email, 'password' => "test", :referer => "/history"}
     assert_response :redirect
     follow_redirect!
     assert_response :success
-    assert_template 'changeset/list'
+    assert_template 'changeset/history'
+    assert_select "span.username", "test"
   end
 
   def test_login_email_password_normal_upcase
@@ -38,17 +39,18 @@ class UserLoginTest < ActionController::IntegrationTest
     follow_redirect!
     assert_response :success
 
-    post '/login', {'username' => user.email.upcase, 'password' => "wrong", :referer => "/browse"}
+    post '/login', {'username' => user.email.upcase, 'password' => "wrong", :referer => "/history"}
     assert_response :redirect
     follow_redirect!
     assert_response :success
     assert_template 'login'
 
-    post '/login', {'username' => user.email.upcase, 'password' => "test", :referer => "/browse"}
+    post '/login', {'username' => user.email.upcase, 'password' => "test", :referer => "/history"}
     assert_response :redirect
     follow_redirect!
     assert_response :success
-    assert_template 'login'
+    assert_template 'changeset/history'
+    assert_select "span.username", "TEST"
   end
 
   def test_login_email_password_normal_titlecase
@@ -60,17 +62,18 @@ class UserLoginTest < ActionController::IntegrationTest
     follow_redirect!
     assert_response :success
 
-    post '/login', {'username' => user.email.titlecase, 'password' => "wrong", :referer => "/browse"}
+    post '/login', {'username' => user.email.titlecase, 'password' => "wrong", :referer => "/history"}
     assert_response :redirect
     follow_redirect!
     assert_response :success
     assert_template 'login'
 
-    post '/login', {'username' => user.email.titlecase, 'password' => "test", :referer => "/browse"}
+    post '/login', {'username' => user.email.titlecase, 'password' => "test", :referer => "/history"}
     assert_response :redirect
     follow_redirect!
     assert_response :success
     assert_template 'login'
+    assert_select "span.username", false
   end
 
   def test_login_email_password_public
@@ -82,17 +85,18 @@ class UserLoginTest < ActionController::IntegrationTest
     follow_redirect!
     assert_response :success
 
-    post '/login', {'username' => user.email, 'password' => "wrong", :referer => "/browse"}
+    post '/login', {'username' => user.email, 'password' => "wrong", :referer => "/history"}
     assert_response :redirect
     follow_redirect!
     assert_response :success
     assert_template 'login'
 
-    post '/login', {'username' => user.email, 'password' => "test", :referer => "/browse"}
+    post '/login', {'username' => user.email, 'password' => "test", :referer => "/history"}
     assert_response :redirect
     follow_redirect!
     assert_response :success
-    assert_template 'changeset/list'
+    assert_template 'changeset/history'
+    assert_select "span.username", "test2"
   end
 
   def test_login_email_password_public_upcase
@@ -104,17 +108,18 @@ class UserLoginTest < ActionController::IntegrationTest
     follow_redirect!
     assert_response :success
 
-    post '/login', {'username' => user.email.upcase, 'password' => "wrong", :referer => "/browse"}
+    post '/login', {'username' => user.email.upcase, 'password' => "wrong", :referer => "/history"}
     assert_response :redirect
     follow_redirect!
     assert_response :success
     assert_template 'login'
 
-    post '/login', {'username' => user.email.upcase, 'password' => "test", :referer => "/browse"}
+    post '/login', {'username' => user.email.upcase, 'password' => "test", :referer => "/history"}
     assert_response :redirect
     follow_redirect!
     assert_response :success
-    assert_template 'changeset/list'
+    assert_template 'changeset/history'
+    assert_select "span.username", "test2"
   end
 
   def test_login_email_password_public_titlecase
@@ -126,17 +131,18 @@ class UserLoginTest < ActionController::IntegrationTest
     follow_redirect!
     assert_response :success
 
-    post '/login', {'username' => user.email.titlecase, 'password' => "wrong", :referer => "/browse"}
+    post '/login', {'username' => user.email.titlecase, 'password' => "wrong", :referer => "/history"}
     assert_response :redirect
     follow_redirect!
     assert_response :success
     assert_template 'login'
 
-    post '/login', {'username' => user.email.titlecase, 'password' => "test", :referer => "/browse"}
+    post '/login', {'username' => user.email.titlecase, 'password' => "test", :referer => "/history"}
     assert_response :redirect
     follow_redirect!
     assert_response :success
-    assert_template 'changeset/list'
+    assert_template 'changeset/history'
+    assert_select "span.username", "test2"
   end
 
   def test_login_username_password_normal
@@ -148,17 +154,18 @@ class UserLoginTest < ActionController::IntegrationTest
     follow_redirect!
     assert_response :success
 
-    post '/login', {'username' => user.display_name, 'password' => "wrong", :referer => "/browse"}
+    post '/login', {'username' => user.display_name, 'password' => "wrong", :referer => "/history"}
     assert_response :redirect
     follow_redirect!
     assert_response :success
     assert_template 'login'
 
-    post '/login', {'username' => user.display_name, 'password' => "test", :referer => "/browse"}
+    post '/login', {'username' => user.display_name, 'password' => "test", :referer => "/history"}
     assert_response :redirect
     follow_redirect!
     assert_response :success
-    assert_template 'changeset/list'
+    assert_template 'changeset/history'
+    assert_select "span.username", "test"
   end
 
   def test_login_username_password_normal_upcase
@@ -170,17 +177,18 @@ class UserLoginTest < ActionController::IntegrationTest
     follow_redirect!
     assert_response :success
 
-    post '/login', {'username' => user.display_name.upcase, 'password' => "wrong", :referer => "/browse"}
+    post '/login', {'username' => user.display_name.upcase, 'password' => "wrong", :referer => "/history"}
     assert_response :redirect
     follow_redirect!
     assert_response :success
     assert_template 'login'
 
-    post '/login', {'username' => user.display_name.upcase, 'password' => "test", :referer => "/browse"}
+    post '/login', {'username' => user.display_name.upcase, 'password' => "test", :referer => "/history"}
     assert_response :redirect
     follow_redirect!
     assert_response :success
-    assert_template 'login'
+    assert_template 'changeset/history'
+    assert_select "span.username", "TEST"
   end
 
   def test_login_username_password_normal_titlecase
@@ -192,17 +200,18 @@ class UserLoginTest < ActionController::IntegrationTest
     follow_redirect!
     assert_response :success
 
-    post '/login', {'username' => user.display_name.titlecase, 'password' => "wrong", :referer => "/browse"}
+    post '/login', {'username' => user.display_name.titlecase, 'password' => "wrong", :referer => "/history"}
     assert_response :redirect
     follow_redirect!
     assert_response :success
     assert_template 'login'
 
-    post '/login', {'username' => user.display_name.titlecase, 'password' => "test", :referer => "/browse"}
+    post '/login', {'username' => user.display_name.titlecase, 'password' => "test", :referer => "/history"}
     assert_response :redirect
     follow_redirect!
     assert_response :success
     assert_template 'login'
+    assert_select "span.username", false
   end
 
   def test_login_username_password_public
@@ -214,17 +223,18 @@ class UserLoginTest < ActionController::IntegrationTest
     follow_redirect!
     assert_response :success
 
-    post '/login', {'username' => user.display_name, 'password' => "wrong", :referer => "/browse"}
+    post '/login', {'username' => user.display_name, 'password' => "wrong", :referer => "/history"}
     assert_response :redirect
     follow_redirect!
     assert_response :success
     assert_template 'login'
 
-    post '/login', {'username' => user.display_name, 'password' => "test", :referer => "/browse"}
+    post '/login', {'username' => user.display_name, 'password' => "test", :referer => "/history"}
     assert_response :redirect
     follow_redirect!
     assert_response :success
-    assert_template 'changeset/list'
+    assert_template 'changeset/history'
+    assert_select "span.username", "test2"
   end
 
   def test_login_username_password_public_upcase
@@ -236,17 +246,18 @@ class UserLoginTest < ActionController::IntegrationTest
     follow_redirect!
     assert_response :success
 
-    post '/login', {'username' => user.display_name.upcase, 'password' => "wrong", :referer => "/browse"}
+    post '/login', {'username' => user.display_name.upcase, 'password' => "wrong", :referer => "/history"}
     assert_response :redirect
     follow_redirect!
     assert_response :success
     assert_template 'login'
 
-    post '/login', {'username' => user.display_name.upcase, 'password' => "test", :referer => "/browse"}
+    post '/login', {'username' => user.display_name.upcase, 'password' => "test", :referer => "/history"}
     assert_response :redirect
     follow_redirect!
     assert_response :success
-    assert_template 'changeset/list'
+    assert_template 'changeset/history'
+    assert_select "span.username", "test2"
   end
 
   def test_login_username_password_public_titlecase
@@ -258,17 +269,18 @@ class UserLoginTest < ActionController::IntegrationTest
     follow_redirect!
     assert_response :success
 
-    post '/login', {'username' => user.display_name.titlecase, 'password' => "wrong", :referer => "/browse"}
+    post '/login', {'username' => user.display_name.titlecase, 'password' => "wrong", :referer => "/history"}
     assert_response :redirect
     follow_redirect!
     assert_response :success
     assert_template 'login'
 
-    post '/login', {'username' => user.display_name.titlecase, 'password' => "test", :referer => "/browse"}
+    post '/login', {'username' => user.display_name.titlecase, 'password' => "test", :referer => "/history"}
     assert_response :redirect
     follow_redirect!
     assert_response :success
-    assert_template 'changeset/list'
+    assert_template 'changeset/history'
+    assert_select "span.username", "test2"
   end
 
   def test_login_openid_success
@@ -277,7 +289,7 @@ class UserLoginTest < ActionController::IntegrationTest
     assert_redirected_to "controller" => "user", "action" => "login", "cookie_test" => "true"
     follow_redirect!
     assert_response :success
-    post '/login', {'openid_url' => "http://localhost:1123/john.doe?openid.success=true", :referer => "/browse"}
+    post '/login', {'openid_url' => "http://localhost:1123/john.doe?openid.success=true", :referer => "/history"}
     assert_response :redirect
 
     res = openid_request(@response.redirect_url)
@@ -286,7 +298,8 @@ class UserLoginTest < ActionController::IntegrationTest
     assert_response :redirect
     follow_redirect!
     assert_response :success
-    assert_template 'changeset/list'
+    assert_template 'changeset/history'
+    assert_select "span.username", "openIDuser"
   end
 
   def test_login_openid_cancel
@@ -305,6 +318,7 @@ class UserLoginTest < ActionController::IntegrationTest
     follow_redirect!
     assert_response :success
     assert_template 'login'
+    assert_select "span.username", false
   end
 
   def test_login_openid_invalid_provider
@@ -319,6 +333,7 @@ class UserLoginTest < ActionController::IntegrationTest
     follow_redirect!
     assert_response :success
     assert_template 'login'
+    assert_select "span.username", false
   end
 
   def test_login_openid_invalid_url
@@ -333,6 +348,7 @@ class UserLoginTest < ActionController::IntegrationTest
     follow_redirect!
     assert_response :success
     assert_template 'login'
+    assert_select "span.username", false
   end
 
   def test_login_openid_unknown
@@ -351,5 +367,6 @@ class UserLoginTest < ActionController::IntegrationTest
     follow_redirect!
     assert_response :success
     assert_template 'user/new'
+    assert_select "span.username", false
   end
 end

@@ -1,19 +1,15 @@
 /* Make space for icons */
 
-li.node::before,
-li.way::before,
-li.relation::before,
-a.node:first-child::before,
-a.way:first-child::before,
-a.relation:first-child::before {
-  margin-left: -25px;
-}
-
 .node::before,
 .way::before,
 .relation::before {
   display: inline-block;
   width: 25px;
+  margin-left: -25px;
+}
+
+.node, .way, .relation {
+  margin-left: 25px;
 }
 
 /* Deleted objects */
@@ -114,6 +110,8 @@ a.relation:first-child::before {
 .aeroway.runway::before { content: image-url('browse/runway.20.png'); }
 .aeroway.taxiway::before { content: image-url('browse/taxiway.20.png'); }
 
+.barrier.wall::before { content: image-url('browse/wall.20.png'); }
+
 .building::before { content: image-url('browse/building.png'); }
 
 .highway.bridleway::before { content: image-url('browse/bridleway.20.png'); }
@@ -122,6 +120,7 @@ a.relation:first-child::before {
 .highway.footway::before { content: image-url('browse/footway.20.png'); }
 .highway.motorway::before { content: image-url('browse/motorway.20.png'); }
 .highway.motorway_link::before { content: image-url('browse/motorway.20.png'); }
+.highway.path::before { content: image-url('browse/path.20.png'); }
 .highway.pedestrian::before { content: image-url('browse/service.20.png'); }
 .highway.primary::before { content: image-url('browse/primary.20.png'); }
 .highway.primary_link::before { content: image-url('browse/primary.20.png'); }
@@ -129,6 +128,8 @@ a.relation:first-child::before {
 .highway.secondary::before { content: image-url('browse/secondary.20.png'); }
 .highway.secondary_link::before { content: image-url('browse/secondary.20.png'); }
 .highway.service::before { content: image-url('browse/service.20.png'); }
+.highway.tertiary::before { content: image-url('browse/tertiary.20.png'); }
+.highway.track::before { content: image-url('browse/track.20.png'); }
 .highway.trunk::before { content: image-url('browse/trunk.20.png'); }
 .highway.trunk_link::before { content: image-url('browse/trunk.20.png'); }
 .highway.unclassified::before { content: image-url('browse/unclassified.20.png'); }

@@ -1,5 +1,5 @@
 class UserController < ApplicationController
-  layout :choose_layout
+  layout 'site', :except => [:api_details]
 
   skip_before_filter :verify_authenticity_token, :only => [:api_read, :api_details, :api_gpx_files]
   before_filter :disable_terms_redirect, :only => [:terms, :save, :logout, :api_details]
@@ -7,6 +7,7 @@ class UserController < ApplicationController
   before_filter :authorize_web, :except => [:api_read, :api_details, :api_gpx_files]
   before_filter :set_locale, :except => [:api_read, :api_details, :api_gpx_files]
   before_filter :require_user, :only => [:account, :go_public, :make_friend, :remove_friend]
+  before_filter :require_self, :only => [:account]
   before_filter :check_database_readable, :except => [:login, :api_read, :api_details, :api_gpx_files]
   before_filter :check_database_writable, :only => [:new, :account, :confirm, :confirm_email, :lost_password, :reset_password, :go_public, :make_friend, :remove_friend]
   before_filter :check_api_readable, :only => [:api_read, :api_details, :api_gpx_files]
@@ -26,13 +27,12 @@ class UserController < ApplicationController
       render :partial => "terms"
     else
       @title = t 'user.terms.title'
-      @user ||= session[:new_user]
 
-      if !@user
-        redirect_to :action => :login, :referer => request.fullpath
-      elsif @user.terms_agreed?
+      if @user and @user.terms_agreed?
         # Already agreed to terms, so just show settings
         redirect_to :action => :account, :display_name => @user.display_name
+      elsif @user.nil? and session[:new_user].nil?
+        redirect_to :action => :login, :referer => request.fullpath
       end
     end
   end
@@ -74,33 +74,39 @@ class UserController < ApplicationController
     else
       @user = session.delete(:new_user)
 
-      if Acl.no_account_creation(request.remote_ip, @user.email.split("@").last)
-        render :action => 'blocked'
-      else
+      if check_signup_allowed(@user.email)
         @user.data_public = true
         @user.description = "" if @user.description.nil?
         @user.creation_ip = request.remote_ip
-        @user.languages = request.user_preferred_languages
+        @user.languages = http_accept_language.user_preferred_languages
         @user.terms_agreed = Time.now.getutc
         @user.terms_seen = true
         @user.openid_url = nil if @user.openid_url and @user.openid_url.empty?
 
         if @user.save
-          flash[:piwik_goal] = PIWIK_SIGNUP_GOAL if defined?(PIWIK_SIGNUP_GOAL)
+          flash[:piwik_goal] = PIWIK["goals"]["signup"] if defined?(PIWIK)
+
+          referer = welcome_path
+
+          begin
+            uri = URI(session[:referer])
+            /map=(.*)\/(.*)\/(.*)/.match(uri.fragment) do |m|
+              editor = Rack::Utils.parse_query(uri.query).slice('editor')
+              referer = welcome_path({'zoom' => m[1],
+                                      'lat' => m[2],
+                                      'lon' => m[3]}.merge(editor))
+            end
+          rescue
+            # Use default
+          end
 
           if @user.status == "active"
-            flash[:notice] = t 'user.new.flash welcome', :email => @user.email
-
-            Notifier.signup_confirm(@user, nil).deliver
-
+            session[:referer] = referer
             successful_login(@user)
           else
-            flash[:notice] = t 'user.new.flash create success message', :email => @user.email
             session[:token] = @user.tokens.create.token
-
-            Notifier.signup_confirm(@user, @user.tokens.create(:referer => session.delete(:referer))).deliver
-
-            redirect_to :action => 'login', :referer => params[:referer]
+            Notifier.signup_confirm(@user, @user.tokens.create(:referer => referer)).deliver_now
+            redirect_to :action => 'confirm', :display_name => @user.display_name
           end
         else
           render :action => 'new', :referer => params[:referer]
@@ -159,7 +165,7 @@ class UserController < ApplicationController
 
       if user
         token = user.tokens.create
-        Notifier.lost_password(user, token).deliver
+        Notifier.lost_password(user, token).deliver_now
         flash[:notice] = t 'user.lost_password.notice email on way'
         redirect_to :action => 'login'
       else
@@ -193,6 +199,8 @@ class UserController < ApplicationController
         flash[:error] = t 'user.reset_password.flash token bad'
         redirect_to :action => 'lost_password'
       end
+    else
+      render :text => "", :status => :bad_request
     end
   end
 
@@ -231,19 +239,17 @@ class UserController < ApplicationController
                        :openid_url => params[:openid])
 
       flash.now[:notice] = t 'user.new.openid association'
-    elsif Acl.no_account_creation(request.remote_ip)
-      render :action => 'blocked'
+    else
+      check_signup_allowed
     end
   end
 
   def create
-    if params[:user] and Acl.no_account_creation(request.remote_ip, params[:user][:email].split("@").last)
-      render :action => 'blocked'
+    @user = User.new(user_params)
 
-    else
+    if check_signup_allowed(@user.email)
       session[:referer] = params[:referer]
 
-      @user = User.new(params[:user])
       @user.status = "pending"
 
       if @user.openid_url.present? && @user.pass_crypt.empty?
@@ -304,62 +310,50 @@ class UserController < ApplicationController
 
   def confirm
     if request.post?
-      if token = UserToken.find_by_token(params[:confirm_string])
-        if token.user.active?
-          flash[:error] = t('user.confirm.already active')
-          redirect_to :action => 'login'
+      token = UserToken.find_by_token(params[:confirm_string])
+      if token && token.user.active?
+        flash[:error] = t('user.confirm.already active')
+        redirect_to :action => 'login'
+      elsif !token || token.expired?
+        flash[:error] = t('user.confirm.unknown token')
+        redirect_to :action => 'confirm'
+      else
+        user = token.user
+        user.status = "active"
+        user.email_valid = true
+        user.save!
+        referer = token.referer
+        token.destroy
+
+        if session[:token]
+          token = UserToken.find_by_token(session[:token])
+          session.delete(:token)
         else
-          user = token.user
-          user.status = "active"
-          user.email_valid = true
-          user.save!
-          referer = token.referer
+          token = nil
+        end
+
+        if token.nil? or token.user != user
+          flash[:notice] = t('user.confirm.success')
+          redirect_to :action => :login, :referer => referer
+        else
           token.destroy
 
-          if session[:token]
-            token = UserToken.find_by_token(session[:token])
-            session.delete(:token)
-          else
-            token = nil
-          end
+          session[:user] = user.id
 
-          if token.nil? or token.user != user
-            flash[:notice] = t('user.confirm.success')
-            redirect_to :action => :login, :referer => referer
-          else
-            token.destroy
-
-            session[:user] = user.id
-            cookies.permanent["_osm_username"] = user.display_name
-
-            if referer.nil?
-              flash[:notice] = t('user.confirm.success') + "<br /><br />" + t('user.confirm.before you start')
-              redirect_to :action => :account, :display_name => user.display_name
-            else
-              flash[:notice] = t('user.confirm.success')
-              redirect_to referer
-            end
-          end
+          redirect_to referer || welcome_path
         end
-      else
-        user = User.find_by_display_name(params[:display_name])
-
-        if user and user.active?
-          flash[:error] = t('user.confirm.already active')
-        elsif user
-          flash[:error] = t('user.confirm.unknown token') + t('user.confirm.reconfirm', :reconfirm => url_for(:action => 'confirm_resend', :display_name => params[:display_name]))
-        else
-          flash[:error] = t('user.confirm.unknown token')
-        end
-
-        redirect_to :action => 'login'
+      end
+    else
+      user = User.find_by_display_name(params[:display_name])
+      if !user || user.active?
+        redirect_to root_path
       end
     end
   end
 
   def confirm_resend
     if user = User.find_by_display_name(params[:display_name])
-      Notifier.signup_confirm(user, user.tokens.create).deliver
+      Notifier.signup_confirm(user, user.tokens.create).deliver_now
       flash[:notice] = t 'user.confirm_resend.success', :email => user.email
     else
       flash[:notice] = t 'user.confirm_resend.failure', :name => params[:display_name]
@@ -383,7 +377,6 @@ class UserController < ApplicationController
         end
         token.destroy
         session[:user] = @user.id
-        cookies.permanent["_osm_username"] = @user.display_name
         redirect_to :action => 'account', :display_name => @user.display_name
       else
         flash[:error] = t 'user.confirm_email.failure'
@@ -431,7 +424,7 @@ class UserController < ApplicationController
         unless @user.is_friends_with?(@new_friend)
           if friend.save
             flash[:notice] = t 'user.make_friend.success', :name => @new_friend.display_name
-            Notifier.friend_notification(friend).deliver
+            Notifier.friend_notification(friend).deliver_now
           else
             friend.add_error(t('user.make_friend.failed', :name => @new_friend.display_name))
           end
@@ -518,7 +511,7 @@ private
     if user = User.authenticate(:username => username, :password => password)
       successful_login(user)
     elsif user = User.authenticate(:username => username, :password => password, :pending => true)
-      failed_login t('user.login.account not active', :reconfirm => url_for(:action => 'confirm_resend', :display_name => user.display_name))
+      unconfirmed_login(user)
     elsif User.authenticate(:username => username, :password => password, :suspended => true)
       failed_login t('user.login.account is suspended', :webmaster => "mailto:webmaster@openstreetmap.org")
     else
@@ -549,7 +542,7 @@ private
         if user = User.find_by_openid_url(identity_url)
           case user.status
             when "pending" then
-              failed_login t('user.login.account not active', :reconfirm => url_for(:action => 'confirm_resend', :display_name => user.display_name))
+              unconfirmed_login(user)
             when "active", "confirmed" then
               successful_login(user)
             when "suspended" then
@@ -644,8 +637,6 @@ private
   ##
   # process a successful login
   def successful_login(user)
-    cookies.permanent["_osm_username"] = user.display_name
-
     session[:user] = user.id
     session_expires_after 28.days if session[:remember_me]
 
@@ -675,6 +666,15 @@ private
     flash[:error] = message
 
     redirect_to :action => 'login', :referer =>  session[:referer]
+
+    session.delete(:remember_me)
+    session.delete(:referer)
+  end
+
+  ##
+  #
+  def unconfirmed_login(user)
+    redirect_to :action => 'confirm', :display_name => user.display_name
 
     session.delete(:remember_me)
     session.delete(:referer)
@@ -724,9 +724,7 @@ private
     if user.save
       set_locale
 
-      cookies.permanent["_osm_username"] = user.display_name
-
-      if user.new_email.blank?
+      if user.new_email.blank? or user.new_email == user.email
         flash.now[:notice] = t 'user.account.flash update success'
       else
         user.email = user.new_email
@@ -735,7 +733,7 @@ private
           flash.now[:notice] = t 'user.account.flash update success confirm needed'
 
           begin
-            Notifier.email_confirm(user, user.tokens.create).deliver
+            Notifier.email_confirm(user, user.tokens.create).deliver_now
           rescue
             # Ignore errors sending email
           end
@@ -744,7 +742,7 @@ private
           @user.errors.set(:email, [])
         end
 
-        user.reset_email!
+        user.restore_email!
       end
     end
   end
@@ -767,6 +765,14 @@ private
   end
 
   ##
+  # require that the user in the URL is the logged in user
+  def require_self
+    if params[:display_name] != @user.display_name
+      render :text => "", :status => :forbidden
+    end
+  end
+
+  ##
   # ensure that there is a "this_user" instance variable
   def lookup_user_by_id
     @this_user = User.find(params[:id])
@@ -781,26 +787,35 @@ private
   end
 
   ##
-  # Choose the layout to use. See
-  # https://rails.lighthouseapp.com/projects/8994/tickets/5371-layout-with-onlyexcept-options-makes-other-actions-render-without-layouts
-  def choose_layout
-    oauth_url = url_for(:controller => :oauth, :action => :authorize, :only_path => true)
-
-    if [ 'api_details' ].include? action_name
-      nil
-    elsif params[:referer] and URI.parse(params[:referer]).path == oauth_url
-      'slim'
-    else
-      'site'
-    end
-  end
-
-  ##
   #
   def disable_terms_redirect
     # this is necessary otherwise going to the user terms page, when
     # having not agreed already would cause an infinite redirect loop.
     # it's .now so that this doesn't propagate to other pages.
     flash.now[:skip_terms] = true
+  end
+
+  ##
+  # return permitted user parameters
+  def user_params
+    params.require(:user).permit(:email, :email_confirmation, :display_name, :openid_url, :pass_crypt, :pass_crypt_confirmation)
+  end
+
+  ##
+  # check signup acls
+  def check_signup_allowed(email = nil)
+    if email.nil?
+      domain = nil
+    else
+      domain = email.split("@").last
+    end
+
+    if blocked = Acl.no_account_creation(request.remote_ip, domain)
+      logger.info "Blocked signup from #{request.remote_ip} for #{email}"
+
+      render :action => 'blocked'
+    end
+
+    not blocked
   end
 end

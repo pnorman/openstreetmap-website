@@ -6,18 +6,10 @@ class Notifier < ActionMailer::Base
 
   def signup_confirm(user, token)
     with_recipient_locale user do
-      # If we are passed an email address verification token, create
-      # the confirumation URL for account activation.
-      #
-      # Otherwise the email has already been verified e.g. through
-      # a trusted openID provider and the account is active and a
-      # confirmation URL is not needed.
-      if token
-        @url = url_for(:host => SERVER_URL,
-                       :controller => "user", :action => "confirm",
-                       :display_name => user.display_name,
-                       :confirm_string => token.token)
-      end
+      @url = url_for(:host => SERVER_URL,
+                     :controller => "user", :action => "confirm",
+                     :display_name => user.display_name,
+                     :confirm_string => token.token)
 
       mail :to => user.email,
            :subject => I18n.t('notifier.signup_confirm.subject')
@@ -148,6 +140,26 @@ class Notifier < ActionMailer::Base
         subject = I18n.t("notifier.note_comment_notification.#{@event}.subject_own", :commenter => @commenter)
       else
         subject = I18n.t("notifier.note_comment_notification.#{@event}.subject_other", :commenter => @commenter)
+      end
+
+      mail :to => recipient.email, :subject => subject
+    end
+  end
+
+  def changeset_comment_notification(comment, recipient)
+    with_recipient_locale recipient do
+      @changeset_url = changeset_url(comment.changeset, :host => SERVER_URL)
+      @comment = comment.body
+      @owner = recipient == comment.changeset.user
+      @commenter = comment.author.display_name
+      @changeset_comment = comment.changeset.tags['comment'].presence
+      @time = comment.created_at
+      @changeset_author = comment.changeset.user.display_name
+
+      if @owner
+        subject = I18n.t("notifier.changeset_comment_notification.commented.subject_own", :commenter => @commenter)
+      else
+        subject = I18n.t("notifier.changeset_comment_notification.commented.subject_other", :commenter => @commenter)
       end
 
       mail :to => recipient.email, :subject => subject

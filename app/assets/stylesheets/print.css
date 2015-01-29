@@ -1,10 +1,6 @@
-#small-title,
-#left,
-#greeting,
-#tabnav,
+header,
 #sidebar,
 #permalink,
-#editmenu,
 .leaflet-control {
   display: none;
 }

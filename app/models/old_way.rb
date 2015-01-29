@@ -1,5 +1,6 @@
 class OldWay < ActiveRecord::Base
   include ConsistencyValidations
+  include ObjectMetadata
 
   self.table_name = "ways"
   self.primary_keys = "way_id", "version"
@@ -30,19 +31,7 @@ class OldWay < ActiveRecord::Base
   end
 
   def save_with_dependencies!
-
-    # dont touch this unless you really have figured out why it's called
-    # (Rails doesn't deal well with the old ways table (called 'ways') because
-    # it doesn't have a unique key. It knows how to insert and auto_increment
-    # id and get it back but we have that and we want to get the 'version' back
-    # we could add another column but thats a lot of data. No, set_primary_key
-    # doesn't work either.
     save!
-    clear_aggregation_cache
-    clear_association_cache
-    @attributes.update(OldWay.where(:way_id => self.way_id, :timestamp => self.timestamp).order("version DESC").first.instance_variable_get('@attributes'))
-
-    # ok, you can touch from here on
 
     self.tags.each do |k,v|
       tag = OldWayTag.new
@@ -64,24 +53,11 @@ class OldWay < ActiveRecord::Base
   end
 
   def nds
-    unless @nds
-      @nds = Array.new
-      OldWayNode.where(:way_id => self.way_id, :version => self.version).order(:sequence_id).each do |nd|
-        @nds += [nd.node_id]
-      end
-    end
-    @nds
+    @nds ||= self.old_nodes.order(:sequence_id).collect { |n| n.node_id }
   end
 
   def tags
-    unless @tags
-      @tags = Hash.new
-      OldWayTag.where(:way_id => self.way_id, :version => self.version).each do |tag|
-        @tags[tag.k] = tag.v
-      end
-    end
-    @tags = Hash.new unless @tags
-    @tags
+    @tags ||= Hash[self.old_tags.collect { |t| [t.k, t.v] }]
   end
 
   def nds=(s)
@@ -93,50 +69,20 @@ class OldWay < ActiveRecord::Base
   end
 
   def to_xml_node(changeset_cache = {}, user_display_name_cache = {})
-    el1 = XML::Node.new 'way'
-    el1['id'] = self.way_id.to_s
-    el1['visible'] = self.visible.to_s
-    el1['timestamp'] = self.timestamp.xmlschema
-    el1['version'] = self.version.to_s
-    el1['changeset'] = self.changeset_id.to_s
+    el = XML::Node.new 'way'
+    el['id'] = self.way_id.to_s
 
-    if changeset_cache.key?(self.changeset_id)
-      # use the cache if available
-    else
-      changeset_cache[self.changeset_id] = self.changeset.user_id
-    end
+    add_metadata_to_xml_node(el, self, changeset_cache, user_display_name_cache)
 
-    user_id = changeset_cache[self.changeset_id]
-
-    if user_display_name_cache.key?(user_id)
-      # use the cache if available
-    elsif self.changeset.user.data_public?
-      user_display_name_cache[user_id] = self.changeset.user.display_name
-    else
-      user_display_name_cache[user_id] = nil
-    end
-
-    if not user_display_name_cache[user_id].nil?
-      el1['user'] = user_display_name_cache[user_id]
-      el1['uid'] = user_id.to_s
-    end
-
-    el1['redacted'] = self.redaction.id.to_s if self.redacted?
-    
     self.old_nodes.each do |nd| # FIXME need to make sure they come back in the right order
-      e = XML::Node.new 'nd'
-      e['ref'] = nd.node_id.to_s
-      el1 << e
+      node_el = XML::Node.new 'nd'
+      node_el['ref'] = nd.node_id.to_s
+      el << node_el
     end
       
-    self.old_tags.each do |tag|
-      e = XML::Node.new 'tag'
-      e['k'] = tag.k
-      e['v'] = tag.v
-      el1 << e
-    end
+    add_tags_to_xml_node(el, self.old_tags)
 
-    return el1
+    return el
   end
 
   # Read full version of old way
@@ -147,12 +93,10 @@ class OldWay < ActiveRecord::Base
   # (i.e. is it visible? are we actually reverting to an earlier version?)
 
   def get_nodes_undelete
-    points = []
-    self.nds.each do |n|
+    self.nds.collect do |n|
       node = Node.find(n)
-      points << [node.lon, node.lat, n, node.version, node.tags_as_hash, node.visible]
+      [node.lon, node.lat, n, node.version, node.tags_as_hash, node.visible]
     end
-    points
   end
   
   def get_nodes_revert(timestamp)

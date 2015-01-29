@@ -5,59 +5,87 @@
 //= require leaflet.key
 //= require leaflet.note
 //= require leaflet.share
+//= require leaflet.query
+//= require index/search
 //= require index/browse
 //= require index/export
 //= require index/notes
+//= require index/history
+//= require index/note
+//= require index/new_note
+//= require index/changeset
+//= require index/query
+//= require router
+
+(function() {
+  var loaderTimeout;
+
+  OSM.loadSidebarContent = function(path, callback) {
+    clearTimeout(loaderTimeout);
+
+    loaderTimeout = setTimeout(function() {
+      $('#sidebar_loader').show();
+    }, 200);
+
+    // IE<10 doesn't respect Vary: X-Requested-With header, so
+    // prevent caching the XHR response as a full-page URL.
+    if (path.indexOf('?') >= 0) {
+      path += '&xhr=1'
+    } else {
+      path += '?xhr=1'
+    }
+
+    $('#sidebar_content')
+      .empty();
+
+    $.ajax({
+      url: path,
+      dataType: "html",
+      complete: function(xhr) {
+        clearTimeout(loaderTimeout);
+        $('#flash').empty();
+        $('#sidebar_loader').hide();
+
+        var content = $(xhr.responseText);
+
+        if (xhr.getResponseHeader('X-Page-Title')) {
+          var title = xhr.getResponseHeader('X-Page-Title');
+          document.title = decodeURIComponent(escape(title));
+        }
+
+        $('head')
+          .find('link[type="application/atom+xml"]')
+          .remove();
+
+        $('head')
+          .append(content.filter('link[type="application/atom+xml"]'));
+
+        $('#sidebar_content').html(content.not('link[type="application/atom+xml"]'));
+
+        if (callback) {
+          callback();
+        }
+      }
+    });
+  };
+})();
 
 $(document).ready(function () {
   var params = OSM.mapParams();
 
-  var map = L.map("map", {
+  var map = new L.OSM.Map("map", {
     zoomControl: false,
     layerControl: false
   });
 
   map.attributionControl.setPrefix('');
 
-  map.hash = L.hash(map);
+  map.updateLayers(params.layers);
 
-  var layers = [
-    new L.OSM.Mapnik({
-      attribution: '',
-      code: "M",
-      keyid: "mapnik",
-      name: I18n.t("javascripts.map.base.standard")
-    }),
-    new L.OSM.CycleMap({
-      attribution: "Tiles courtesy of <a href='http://www.opencyclemap.org/' target='_blank'>Andy Allan</a>",
-      code: "C",
-      keyid: "cyclemap",
-      name: I18n.t("javascripts.map.base.cycle_map")
-    }),
-    new L.OSM.TransportMap({
-      attribution: "Tiles courtesy of <a href='http://www.opencyclemap.org/' target='_blank'>Andy Allan</a>",
-      code: "T",
-      keyid: "transportmap",
-      name: I18n.t("javascripts.map.base.transport_map")
-    }),
-    new L.OSM.MapQuestOpen({
-      attribution: "Tiles courtesy of <a href='http://www.mapquest.com/' target='_blank'>MapQuest</a> <img src='http://developer.mapquest.com/content/osm/mq_logo.png'>",
-      code: "Q",
-      keyid: "mapquest",
-      name: I18n.t("javascripts.map.base.mapquest")
-    })
-  ];
-
-  layers[0].addTo(map);
-
-  map.noteLayer = new L.LayerGroup();
-  map.noteLayer.options = {code: 'N'};
-
-  map.dataLayer = new L.OSM.DataLayer(null);
-  map.dataLayer.options.code = 'D';
-
-  $("#sidebar").on("opened closed", function () {
-    map.invalidateSize();
+  map.on("baselayerchange", function (e) {
+    if (map.getZoom() > e.layer.options.maxZoom) {
+      map.setView(map.getCenter(), e.layer.options.maxZoom, { reset: true });
+    }
   });
 
   var position = $('html').attr('dir') === 'rtl' ? 'topleft' : 'topright';
@@ -65,15 +93,20 @@ $(document).ready(function () {
   L.OSM.zoom({position: position})
     .addTo(map);
 
-  L.control.locate({position: position})
-    .addTo(map);
+  L.control.locate({
+    position: position,
+    strings: {
+      title: I18n.t('javascripts.map.locate.title'),
+      popup: I18n.t('javascripts.map.locate.popup')
+    }
+  }).addTo(map);
 
   var sidebar = L.OSM.sidebar('#map-ui')
     .addTo(map);
 
   L.OSM.layers({
     position: position,
-    layers: layers,
+    layers: map.baseLayers,
     sidebar: sidebar
   }).addTo(map);
 
@@ -93,131 +126,227 @@ $(document).ready(function () {
     sidebar: sidebar
   }).addTo(map);
 
+  L.OSM.query({
+    position: position,
+    sidebar: sidebar
+  }).addTo(map);
+
   L.control.scale()
     .addTo(map);
 
-  map.on('moveend layeradd layerremove', updateLocation);
+  if (OSM.STATUS != 'api_offline' && OSM.STATUS != 'database_offline') {
+    initializeNotes(map);
+    if (params.layers.indexOf(map.noteLayer.options.code) >= 0) {
+      map.addLayer(map.noteLayer);
+    }
 
-  map.markerLayer = L.layerGroup().addTo(map);
-
-  if (!params.object_zoom) {
-    if (params.bounds) {
-      map.fitBounds(params.bounds);
-    } else {
-      map.setView([params.lat, params.lon], params.zoom);
+    initializeBrowse(map);
+    if (params.layers.indexOf(map.dataLayer.options.code) >= 0) {
+      map.addLayer(map.dataLayer);
     }
   }
 
-  if (params.box) {
-    L.rectangle(params.box, {
-      weight: 2,
-      color: '#e90',
-      fillOpacity: 0
-    }).addTo(map);
-  }
-
-  if (params.layers) {
-    var foundLayer = false;
-    for (var i = 0; i < layers.length; i++) {
-      if (params.layers.indexOf(layers[i].options.code) >= 0) {
-        map.addLayer(layers[i]);
-        foundLayer = true;
-      } else {
-        map.removeLayer(layers[i]);
-      }
-    }
-    if (!foundLayer) {
-      map.addLayer(layers[0]);
-    }
-  }
-
-  if (params.marker) {
-    L.marker([params.mlat, params.mlon], {icon: getUserIcon()}).addTo(map.markerLayer);
-  }
-
-  if (params.object) {
-    addObjectToMap(params.object, map, { zoom: params.object_zoom });
-  }
-
-  $("body").on("click", "a.set_position", setPositionLink(map));
-
-  $("a[data-editor=remote]").click(function(e) {
-      remoteEditHandler(map.getBounds());
-      e.preventDefault();
-  });
-
-  if (OSM.preferred_editor == "remote" && $('body').hasClass("site-edit")) {
-    remoteEditHandler(map.getBounds());
-  }
-
-  $("#search_form").submit(submitSearch(map));
-
-
-  if ($("#query").val()) {
-    $("#search_form").submit();
-  }
-
-  // Focus the search field for browsers that don't support
-  // the HTML5 'autofocus' attribute
-  if (!("autofocus" in document.createElement("input"))) {
-    $("#query").focus();
-  }
-
-  initializeExport(map);
-  initializeBrowse(map, params);
-  initializeNotes(map, params);
-});
-
-function updateLocation() {
-  updatelinks(this.getCenter().wrap(),
-      this.getZoom(),
-      this.getLayersCode(),
-      this.getBounds().wrap());
+  $('.leaflet-control .control-button').tooltip({placement: 'left', container: 'body'});
 
   var expiry = new Date();
   expiry.setYear(expiry.getFullYear() + 10);
-  $.cookie("_osm_location", cookieContent(this), { expires: expiry });
 
-  // Trigger hash update on layer changes.
-  this.hash.onMapMove();
-}
+  map.on('moveend layeradd layerremove', function() {
+    updateLinks(
+      map.getCenter().wrap(),
+      map.getZoom(),
+      map.getLayersCode(),
+      map._object);
 
-function setPositionLink(map) {
-  return function(e) {
-      var data = $(this).data(),
-          center = L.latLng(data.lat, data.lon);
+    $.removeCookie("_osm_location");
+    $.cookie("_osm_location", OSM.locationCookie(map), { expires: expiry, path: "/" });
+  });
 
-      if (data.minLon && data.minLat && data.maxLon && data.maxLat) {
-        map.fitBounds([[data.minLat, data.minLon],
-                       [data.maxLat, data.maxLon]]);
-      } else {
-        map.setView(center, data.zoom);
+  if ($.cookie('_osm_welcome') == 'hide') {
+    $('.welcome').hide();
+  }
+
+  $('.welcome .close').on('click', function() {
+    $('.welcome').hide();
+    $.cookie("_osm_welcome", 'hide', { expires: expiry });
+  });
+
+  if (OSM.PIWIK) {
+    map.on('layeradd', function (e) {
+      if (e.layer.options) {
+        var goal = OSM.PIWIK.goals[e.layer.options.keyid];
+
+        if (goal) {
+          $('body').trigger('piwikgoal', goal);
+        }
       }
+    });
+  }
 
-      if (data.type && data.id) {
-        addObjectToMap(data, map, { zoom: true, style: { opacity: 0.2, fill: false } });
+  if (params.bounds) {
+    map.fitBounds(params.bounds);
+  } else {
+    map.setView([params.lat, params.lon], params.zoom);
+  }
+
+  var marker = L.marker([0, 0], {icon: getUserIcon()});
+
+  if (params.marker) {
+    marker.setLatLng([params.mlat, params.mlon]).addTo(map);
+  }
+
+  $("#homeanchor").on("click", function(e) {
+    e.preventDefault();
+
+    var data = $(this).data(),
+      center = L.latLng(data.lat, data.lon);
+
+    map.setView(center, data.zoom);
+    marker.setLatLng(center).addTo(map);
+  });
+
+  $("a[data-editor=remote]").click(function(e) {
+    var params = OSM.mapParams(this.search);
+    remoteEditHandler(map.getBounds(), params.object);
+    e.preventDefault();
+  });
+
+  if (OSM.params().edit_help) {
+    $('#editanchor')
+      .removeAttr('title')
+      .tooltip({
+        placement: 'bottom',
+        title: I18n.t('javascripts.edit_help')
+      })
+      .tooltip('show');
+
+    $('body').one('click', function() {
+      $('#editanchor').tooltip('hide');
+    });
+  }
+
+  OSM.Index = function(map) {
+    var page = {};
+
+    page.pushstate = function() {
+      $("#content").addClass("overlay-sidebar");
+      map.invalidateSize({pan: false})
+        .panBy([-350, 0], {animate: false});
+      document.title = I18n.t('layouts.project_name.title');
+    };
+
+    page.load = function() {
+      if (!("autofocus" in document.createElement("input"))) {
+        $("#sidebar .search_form input[name=query]").focus();
       }
+      return map.getState();
+    };
 
-      map.markerLayer.clearLayers();
-      L.marker(center, {icon: getUserIcon()}).addTo(map.markerLayer);
+    page.popstate = function() {
+      $("#content").addClass("overlay-sidebar");
+      map.invalidateSize({pan: false});
+      document.title = I18n.t('layouts.project_name.title');
+    };
 
-      return e.preventDefault();
+    page.unload = function() {
+      map.panBy([350, 0], {animate: false});
+      $("#content").removeClass("overlay-sidebar");
+      map.invalidateSize({pan: false});
+    };
+
+    return page;
   };
-}
 
-function submitSearch(map) {
-  return function(e) {
-    var bounds = map.getBounds();
+  OSM.Browse = function(map, type) {
+    var page = {};
 
-    $("#sidebar_title").html(I18n.t('site.sidebar.search_results'));
-    $("#sidebar_content").load($(this).attr("action"), {
-      query: $("#query").val(),
-      minlon: bounds.getWest(),
-      minlat: bounds.getSouth(),
-      maxlon: bounds.getEast(),
-      maxlat: bounds.getNorth()
-    }, openSidebar);
+    page.pushstate = page.popstate = function(path, id) {
+      OSM.loadSidebarContent(path, function() {
+        addObject(type, id);
+      });
+    };
 
-    return e.preventDefault();
+    page.load = function(path, id) {
+      addObject(type, id, true);
+    };
+
+    function addObject(type, id, center) {
+      var bounds = map.addObject({type: type, id: parseInt(id)}, function(bounds) {
+        if (!window.location.hash && bounds.isValid() &&
+            (center || !map.getBounds().contains(bounds))) {
+          OSM.router.withoutMoveListener(function () {
+            map.fitBounds(bounds);
+          });
+        }
+      });
+    }
+
+    page.unload = function() {
+      map.removeObject();
+    };
+
+    return page;
   };
-}
+
+  var history = OSM.History(map);
+
+  OSM.router = OSM.Router(map, {
+    "/":                           OSM.Index(map),
+    "/search":                     OSM.Search(map),
+    "/export":                     OSM.Export(map),
+    "/note/new":                   OSM.NewNote(map),
+    "/history/friends":            history,
+    "/history/nearby":             history,
+    "/history":                    history,
+    "/user/:display_name/history": history,
+    "/note/:id":                   OSM.Note(map),
+    "/node/:id(/history)":         OSM.Browse(map, 'node'),
+    "/way/:id(/history)":          OSM.Browse(map, 'way'),
+    "/relation/:id(/history)":     OSM.Browse(map, 'relation'),
+    "/changeset/:id":              OSM.Changeset(map),
+    "/query":                      OSM.Query(map)
+  });
+
+  if (OSM.preferred_editor == "remote" && document.location.pathname == "/edit") {
+    remoteEditHandler(map.getBounds(), params.object);
+    OSM.router.setCurrentPath("/");
+  }
+
+  OSM.router.load();
+
+  $(document).on("click", "a", function(e) {
+    if (e.isDefaultPrevented() || e.isPropagationStopped())
+      return;
+
+    // Open links in a new tab as normal.
+    if (e.which > 1 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey)
+      return;
+
+    // Ignore cross-protocol and cross-origin links.
+    if (location.protocol !== this.protocol || location.host !== this.host)
+      return;
+
+    if (OSM.router.route(this.pathname + this.search + this.hash))
+      e.preventDefault();
+  });
+
+  $(".search_form").on("submit", function(e) {
+    e.preventDefault();
+    $("header").addClass("closed");
+    var query = $(this).find("input[name=query]").val();
+    if (query) {
+      OSM.router.route("/search?query=" + encodeURIComponent(query) + OSM.formatHash(map));
+    } else {
+      OSM.router.route("/");
+    }
+  });
+
+  $(".describe_location").on("click", function(e) {
+    e.preventDefault();
+    var center = map.getCenter().wrap(),
+      precision = OSM.zoomPrecision(map.getZoom());
+    OSM.router.route("/search?query=" + encodeURIComponent(
+      center.lat.toFixed(precision) + "," + center.lng.toFixed(precision)
+    ));
+  });
+});

@@ -5,17 +5,18 @@ class ChangesetController < ApplicationController
   require 'xml/libxml'
 
   skip_before_filter :verify_authenticity_token, :except => [:list]
-  before_filter :authorize_web, :only => [:list, :feed]
-  before_filter :set_locale, :only => [:list, :feed]
-  before_filter :authorize, :only => [:create, :update, :delete, :upload, :include, :close]
-  before_filter :require_allow_write_api, :only => [:create, :update, :delete, :upload, :include, :close]
-  before_filter :require_public_data, :only => [:create, :update, :delete, :upload, :include, :close]
-  before_filter :check_api_writable, :only => [:create, :update, :delete, :upload, :include]
-  before_filter :check_api_readable, :except => [:create, :update, :delete, :upload, :download, :query, :list, :feed]
-  before_filter(:only => [:list, :feed]) { |c| c.check_database_readable(true) }
+  before_filter :authorize_web, :only => [:list, :feed, :comments_feed]
+  before_filter :set_locale, :only => [:list, :feed, :comments_feed]
+  before_filter :authorize, :only => [:create, :update, :delete, :upload, :include, :close, :comment, :subscribe, :unsubscribe, :hide_comment, :unhide_comment]
+  before_filter :require_moderator, :only => [:hide_comment, :unhide_comment]
+  before_filter :require_allow_write_api, :only => [:create, :update, :delete, :upload, :include, :close, :comment, :subscribe, :unsubscribe, :hide_comment, :unhide_comment]
+  before_filter :require_public_data, :only => [:create, :update, :delete, :upload, :include, :close, :comment, :subscribe, :unsubscribe]
+  before_filter :check_api_writable, :only => [:create, :update, :delete, :upload, :include, :comment, :subscribe, :unsubscribe, :hide_comment, :unhide_comment]
+  before_filter :check_api_readable, :except => [:create, :update, :delete, :upload, :download, :query, :list, :feed, :comment, :subscribe, :unsubscribe, :comments_feed]
+  before_filter(:only => [:list, :feed, :comments_feed]) { |c| c.check_database_readable(true) }
   after_filter :compress_output
-  around_filter :api_call_handle_error, :except => [:list, :feed]
-  around_filter :web_timeout, :only => [:list, :feed]
+  around_filter :api_call_handle_error, :except => [:list, :feed, :comments_feed]
+  around_filter :web_timeout, :only => [:list, :feed, :comments_feed]
 
   # Helper methods for checking consistency
   include ConsistencyValidations
@@ -29,6 +30,10 @@ class ChangesetController < ApplicationController
     # Assume that Changeset.from_xml has thrown an exception if there is an error parsing the xml
     cs.user_id = @user.id
     cs.save_with_tags!
+
+    # Subscribe user to changeset comments
+    cs.subscribers << @user
+
     render :text => cs.id.to_s, :content_type => "text/plain"
   end
 
@@ -37,7 +42,8 @@ class ChangesetController < ApplicationController
   # return anything about the nodes, ways and relations in the changeset.
   def read
     changeset = Changeset.find(params[:id])
-    render :text => changeset.to_xml.to_s, :content_type => "text/xml"
+
+    render :text => changeset.to_xml(params[:include_discussion].presence).to_s, :content_type => "text/xml"
   end
 
   ##
@@ -204,12 +210,13 @@ class ChangesetController < ApplicationController
 
     # create the conditions that the user asked for. some or all of
     # these may be nil.
-    changesets = Changeset.scoped
+    changesets = Changeset.all
     changesets = conditions_bbox(changesets, bbox)
     changesets = conditions_user(changesets, params['user'], params['display_name'])
     changesets = conditions_time(changesets, params['time'])
     changesets = conditions_open(changesets, params['open'])
     changesets = conditions_closed(changesets, params['closed'])
+    changesets = conditions_ids(changesets, params['changesets'])
 
     # create the results document
     results = OSM::API.new.get_xml_doc
@@ -250,91 +257,51 @@ class ChangesetController < ApplicationController
   ##
   # list edits (open changesets) in reverse chronological order
   def list
-    if request.format == :atom and params[:page]
-      redirect_to params.merge({ :page => nil }), :status => :moved_permanently
+    if request.format == :atom and params[:max_id]
+      redirect_to params.merge({ :max_id => nil }), :status => :moved_permanently
+      return
+    end
+
+    if params[:display_name]
+      user = User.find_by_display_name(params[:display_name])
+      if !user || !user.active?
+        render_unknown_user params[:display_name]
+        return
+      end
+    end
+
+    if (params[:friends] || params[:nearby]) && !@user && request.format == :html
+      require_user
+      return
+    end
+
+    if request.format == :html and !params[:list]
+      require_oauth
+      render :action => :history, :layout => map_layout
     else
-      changesets = conditions_nonempty(Changeset.scoped)
+      changesets = conditions_nonempty(Changeset.all)
 
       if params[:display_name]
-        user = User.find_by_display_name(params[:display_name])
-
-        if user and user.active?
-          if user.data_public? or user == @user
-            changesets = changesets.where(:user_id => user.id)
-          else
-            changesets = changesets.where("false")
-          end
+        if user.data_public? or user == @user
+          changesets = changesets.where(:user_id => user.id)
         else
-          render_unknown_user params[:display_name]
-          return
+          changesets = changesets.where("false")
         end
+      elsif params[:bbox]
+        changesets = conditions_bbox(changesets, BoundingBox.from_bbox_params(params))
+      elsif params[:friends] && @user
+        changesets = changesets.where(:user_id => @user.friend_users.identifiable)
+      elsif params[:nearby] && @user
+        changesets = changesets.where(:user_id => @user.nearby)
       end
 
-      if params[:friends]
-        if @user
-          changesets = changesets.where(:user_id => @user.friend_users.public)
-        elsif request.format == :html
-          require_user
-          return
-        end
+      if params[:max_id]
+        changesets = changesets.where("changesets.id <= ?", params[:max_id])
       end
 
-      if params[:nearby]
-        if @user
-          changesets = changesets.where(:user_id => @user.nearby)
-        elsif request.format == :html
-          require_user
-          return
-        end
-      end
+      @edits = changesets.order("changesets.id DESC").limit(20).preload(:user, :changeset_tags)
 
-      if params[:bbox]
-        bbox = BoundingBox.from_bbox_params(params)
-      elsif params[:minlon] and params[:minlat] and params[:maxlon] and params[:maxlat]
-        bbox = BoundingBox.from_lon_lat_params(params)
-      end
-
-      if bbox
-        changesets = conditions_bbox(changesets, bbox)
-        bbox_link = render_to_string :partial => "bbox", :object => bbox
-      end
-
-      if user
-        user_link = render_to_string :partial => "user", :object => user
-      end
-
-      if params[:friends] and @user
-        @title =  t 'changeset.list.title_friend'
-        @heading =  t 'changeset.list.heading_friend'
-        @description = t 'changeset.list.description_friend'
-      elsif params[:nearby] and @user
-        @title = t 'changeset.list.title_nearby'
-        @heading = t 'changeset.list.heading_nearby'
-        @description = t 'changeset.list.description_nearby'
-      elsif user and bbox
-        @title =  t 'changeset.list.title_user_bbox', :user => user.display_name, :bbox => bbox.to_s
-        @heading =  t 'changeset.list.heading_user_bbox', :user => user.display_name, :bbox => bbox.to_s
-        @description = t 'changeset.list.description_user_bbox', :user => user_link, :bbox => bbox_link
-      elsif user
-        @title =  t 'changeset.list.title_user', :user => user.display_name
-        @heading =  t 'changeset.list.heading_user', :user => user.display_name
-        @description = t 'changeset.list.description_user', :user => user_link
-      elsif bbox
-        @title =  t 'changeset.list.title_bbox', :bbox => bbox.to_s
-        @heading =  t 'changeset.list.heading_bbox', :bbox => bbox.to_s
-        @description = t 'changeset.list.description_bbox', :bbox => bbox_link
-      else
-        @title =  t 'changeset.list.title'
-        @heading =  t 'changeset.list.heading'
-        @description = t 'changeset.list.description'
-      end
-
-      @page = (params[:page] || 1).to_i
-      @page_size = 20
-
-      @edits = changesets.order("changesets.created_at DESC").offset((@page - 1) * @page_size).limit(@page_size).preload(:user, :changeset_tags)
-
-      render :action => :list
+      render :action => :list, :layout => false
     end
   end
 
@@ -342,6 +309,145 @@ class ChangesetController < ApplicationController
   # list edits as an atom feed
   def feed
     list
+  end
+
+  ##
+  # Add a comment to a changeset
+  def comment
+    # Check the arguments are sane
+    raise OSM::APIBadUserInput.new("No id was given") unless params[:id]
+    raise OSM::APIBadUserInput.new("No text was given") if params[:text].blank?
+
+    # Extract the arguments
+    id = params[:id].to_i
+    body = params[:text]
+
+    # Find the changeset and check it is valid
+    changeset = Changeset.find(id)
+    raise OSM::APIChangesetNotYetClosedError.new(changeset) if changeset.is_open?
+
+    # Add a comment to the changeset
+    comment = changeset.comments.create({
+      :changeset => changeset,
+      :body => body,
+      :author => @user
+    })
+
+    # Notify current subscribers of the new comment
+    changeset.subscribers.each do |user|
+      if @user != user
+        Notifier.changeset_comment_notification(comment, user).deliver_now
+      end
+    end
+
+    # Add the commenter to the subscribers if necessary
+    changeset.subscribers << @user unless changeset.subscribers.exists?(@user.id)
+
+    # Return a copy of the updated changeset
+    render :text => changeset.to_xml.to_s, :content_type => "text/xml"
+  end
+
+  ##
+  # Adds a subscriber to the changeset
+  def subscribe
+    # Check the arguments are sane
+    raise OSM::APIBadUserInput.new("No id was given") unless params[:id]
+
+    # Extract the arguments
+    id = params[:id].to_i
+
+    # Find the changeset and check it is valid
+    changeset = Changeset.find(id)
+    raise OSM::APIChangesetNotYetClosedError.new(changeset) if changeset.is_open?
+    raise OSM::APIChangesetAlreadySubscribedError.new(changeset) if changeset.subscribers.exists?(@user.id)
+
+    # Add the subscriber
+    changeset.subscribers << @user
+
+    # Return a copy of the updated changeset
+    render :text => changeset.to_xml.to_s, :content_type => "text/xml"
+  end
+
+  ##
+  # Removes a subscriber from the changeset
+  def unsubscribe
+    # Check the arguments are sane
+    raise OSM::APIBadUserInput.new("No id was given") unless params[:id]
+
+    # Extract the arguments
+    id = params[:id].to_i
+
+    # Find the changeset and check it is valid
+    changeset = Changeset.find(id)
+    raise OSM::APIChangesetNotYetClosedError.new(changeset) if changeset.is_open?
+    raise OSM::APIChangesetNotSubscribedError.new(changeset) unless changeset.subscribers.exists?(@user.id)
+
+    # Remove the subscriber
+    changeset.subscribers.delete(@user)
+
+    # Return a copy of the updated changeset
+    render :text => changeset.to_xml.to_s, :content_type => "text/xml"
+  end
+
+  ##
+  # Sets visible flag on comment to false
+  def hide_comment
+    # Check the arguments are sane
+    raise OSM::APIBadUserInput.new("No id was given") unless params[:id]
+
+    # Extract the arguments
+    id = params[:id].to_i
+
+    # Find the changeset
+    comment = ChangesetComment.find(id)
+
+    # Hide the comment
+    comment.update(:visible => false)
+
+    # Return a copy of the updated changeset
+    render :text => comment.changeset.to_xml.to_s, :content_type => "text/xml"
+  end
+
+  ##
+  # Sets visible flag on comment to true
+  def unhide_comment
+    # Check the arguments are sane
+    raise OSM::APIBadUserInput.new("No id was given") unless params[:id]
+
+    # Extract the arguments
+    id = params[:id].to_i
+
+    # Find the changeset
+    comment = ChangesetComment.find(id)
+
+    # Unhide the comment
+    comment.update(:visible => true)
+
+    # Return a copy of the updated changeset
+    render :text => comment.changeset.to_xml.to_s, :content_type => "text/xml"
+  end
+
+  ##
+  # Get a feed of recent changeset comments
+  def comments_feed
+    if params[:id]
+      # Extract the arguments
+      id = params[:id].to_i
+
+      # Find the changeset
+      changeset = Changeset.find(id)
+
+      # Return comments for this changeset only
+      @comments = changeset.comments.includes(:author, :changeset).limit(comments_limit)
+    else
+      # Return comments
+      @comments = ChangesetComment.includes(:author, :changeset).where(:visible => :true).order("created_at DESC").limit(comments_limit).preload(:changeset)
+    end
+
+    # Render the result
+    respond_to do |format|
+      format.rss
+    end
   end
 
 private
@@ -454,10 +560,37 @@ private
   end
 
   ##
+  # query changesets by a list of ids
+  # (either specified as array or comma-separated string)
+  def conditions_ids(changesets, ids)
+    if ids.nil?
+      return changesets
+    elsif ids.empty?
+      raise OSM::APIBadUserInput.new("No changesets were given to search for")
+    else
+      ids = ids.split(',').collect { |n| n.to_i }
+      return changesets.where(:id => ids)
+    end
+  end
+
+  ##
   # eliminate empty changesets (where the bbox has not been set)
   # this should be applied to all changeset list displays
   def conditions_nonempty(changesets)
     return changesets.where("num_changes > 0")
   end
 
+  ##
+  # Get the maximum number of comments to return
+  def comments_limit
+    if params[:limit]
+      if params[:limit].to_i > 0 and params[:limit].to_i <= 10000
+        params[:limit].to_i
+      else
+        raise OSM::APIBadUserInput.new("Comments limit must be between 1 and 10000")
+      end
+    else
+      100
+    end
+  end
 end
